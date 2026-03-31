@@ -3,6 +3,7 @@ import isodate
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
 import streamlit as st
+from youtube_transcript import transcript_fetch
 
 # Load API key
 load_dotenv()
@@ -88,7 +89,8 @@ def enrich_videos(video_list):
                 "views": int(item["statistics"].get("viewCount", 0)),
                 "likes": int(item["statistics"].get("likeCount", 0)),
                 "comments": int(item["statistics"].get("commentCount", 0)),
-                "duration_seconds": duration_seconds
+                "duration_seconds": duration_seconds,
+                "transcript":transcript_fetch(vid)
             }
 
         # Efficient merge
@@ -101,3 +103,4 @@ def enrich_videos(video_list):
         video_list = list(video_dict.values())
 
     return video_list
+
