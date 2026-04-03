@@ -103,4 +103,3 @@ def enrich_videos(video_list):
         video_list = list(video_dict.values())
 
     return video_list
-
