@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import os
 import re
 
 from dotenv import load_dotenv
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnableSequence
-from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
+
+from openai_service import get_openai_client, get_translation_model, openai_is_configured
 
 load_dotenv()
 
@@ -36,42 +33,84 @@ def is_mostly_english(text: str, threshold: float = 0.85) -> bool:
     return (ascii_letters / len(letters)) >= threshold
 
 
+def should_translate(language: str, text: str) -> bool:
+    normalized = (language or "").strip().lower()
+    if normalized in {"", "unknown"}:
+        return not is_mostly_english(text)
+    if normalized.startswith("en"):
+        return False
+    return True
+
+
+def split_for_translation(text: str, max_chars: int = 1800) -> list[str]:
+    if len(text) <= max_chars:
+        return [text]
+
+    sentences = re.split(r"(?<=[.!?।])\s+", text)
+    chunks: list[str] = []
+    current = ""
+
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+
+        candidate = f"{current} {sentence}".strip()
+        if current and len(candidate) > max_chars:
+            chunks.append(current.strip())
+            current = sentence
+        else:
+            current = candidate
+
+    if current.strip():
+        chunks.append(current.strip())
+
+    return chunks or [text]
+
+
 def build_translation_chain():
-    token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
-    if not token:
+    if not openai_is_configured():
         return None
-
-    llm = HuggingFaceEndpoint(
-        repo_id="meta-llama/Llama-3.1-8B-Instruct",
-        task="text-generation",
-        huggingfacehub_api_token=token,
-        max_new_tokens=512,
-        temperature=0.1,
-    )
-
-    prompt = PromptTemplate(
-        template=(
-            "Translate the following text to English. "
-            "Keep names and intent intact. Do not summarize.\n\n"
-            "Text:\n{text}"
-        ),
-        input_variables=["text"],
-    )
-
-    model = ChatHuggingFace(llm=llm)
-    parser = StrOutputParser()
-    return RunnableSequence(first=prompt, middle=[model], last=parser)
+    return {
+        "client": get_openai_client(),
+        "model": get_translation_model(),
+    }
 
 
-def preprocess_text(text, translation_chain=None):
+def translate_text(text: str, translation_chain) -> str:
+    if not translation_chain:
+        return text
+
+    client = translation_chain["client"]
+    model = translation_chain["model"]
+    translated_chunks: list[str] = []
+
+    for chunk in split_for_translation(text):
+        try:
+            response = client.responses.create(
+                model=model,
+                input=(
+                    "Translate the following transcript text to English. "
+                    "Preserve names, meaning, and details. Do not summarize.\n\n"
+                    f"Text:\n{chunk}"
+                ),
+                reasoning={"effort": "none"},
+                text={"verbosity": "low"},
+                max_output_tokens=1200,
+            )
+            translated_chunks.append(clean_text(response.output_text))
+        except Exception:
+            translated_chunks.append(chunk)
+
+    return " ".join(part for part in translated_chunks if part).strip()
+
+
+def preprocess_text(text, transcript_language: str = "", translation_chain=None):
     text = clean_text(text)
     if not text:
         return ""
 
-    if translation_chain and not is_mostly_english(text):
-        try:
-            text = translation_chain.invoke({"text": text})
-        except Exception:
-            pass
+    if should_translate(transcript_language, text):
+        text = translate_text(text, translation_chain)
 
     return clean_text(text)

@@ -1,45 +1,11 @@
 from __future__ import annotations
 
-import os
-
 from dotenv import load_dotenv
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnableSequence
-from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 
+from openai_service import get_openai_client, get_reasoning_model, openai_is_configured
 from rag.retriever import build_context, retrieve_chunks
 
 load_dotenv()
-
-
-def setup_chain():
-    token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
-    if not token:
-        return None
-
-    llm = HuggingFaceEndpoint(
-        repo_id="meta-llama/Llama-3.1-8B-Instruct",
-        task="text-generation",
-        huggingfacehub_api_token=token,
-        max_new_tokens=512,
-        temperature=0.2,
-    )
-
-    model = ChatHuggingFace(llm=llm)
-    parser = StrOutputParser()
-    prompt = PromptTemplate(
-        template=(
-            "Answer using only the provided transcript context.\n"
-            "If the answer is uncertain, say so clearly.\n\n"
-            "Context:\n{context}\n\n"
-            "Question:\n{question}\n\n"
-            "Answer:"
-        ),
-        input_variables=["context", "question"],
-    )
-
-    return RunnableSequence(first=prompt, middle=[model], last=parser)
 
 
 def fallback_answer(results):
@@ -56,7 +22,7 @@ def fallback_answer(results):
         )
 
     return (
-        "Hugging Face generation is not configured, so here are the most relevant transcript excerpts:\n\n"
+        "OpenAI generation is not configured, so here are the most relevant transcript excerpts:\n\n"
         + "\n".join(lines)
     )
 
@@ -66,12 +32,26 @@ def run_query(vectorstore, query):
     if not results:
         return "No relevant transcript content was found for that question."
 
-    chain = setup_chain()
-    if chain is None:
+    if not openai_is_configured():
         return fallback_answer(results)
 
     context = build_context(results)
+    client = get_openai_client()
+
     try:
-        return chain.invoke({"context": context, "question": query})
+        response = client.responses.create(
+            model=get_reasoning_model(),
+            input=(
+                "Answer using only the provided transcript context. "
+                "If the answer is uncertain, say so clearly.\n\n"
+                f"Context:\n{context}\n\n"
+                f"Question:\n{query}\n\n"
+                "Answer:"
+            ),
+            reasoning={"effort": "none"},
+            text={"verbosity": "medium"},
+            max_output_tokens=900,
+        )
+        return response.output_text
     except Exception:
         return fallback_answer(results)

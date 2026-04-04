@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from apify_service import fetch_transcript_with_apify
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import (
     CouldNotRetrieveTranscript,
@@ -97,5 +98,9 @@ def transcript_fetch(video_id: str) -> dict[str, str]:
                 continue
     except Exception:
         return empty
+
+    apify_result = fetch_transcript_with_apify(video_id)
+    if apify_result.get("transcript", "").strip():
+        return apify_result
 
     return empty

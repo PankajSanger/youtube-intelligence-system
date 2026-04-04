@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
 
 from rag.index_builder import build_index
+from rag.openai_embeddings import OpenAIEmbeddingFunction
 
 
 def _index_is_complete(path="faiss_index") -> bool:
@@ -14,7 +14,7 @@ def _index_is_complete(path="faiss_index") -> bool:
 
 
 def load_index(path="faiss_index"):
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    embeddings = OpenAIEmbeddingFunction()
     return FAISS.load_local(
         path,
         embeddings,

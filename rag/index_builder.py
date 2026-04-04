@@ -4,9 +4,9 @@ from pathlib import Path
 
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from rag.openai_embeddings import OpenAIEmbeddingFunction
 from rag.preprocessing import build_translation_chain, preprocess_text
 from utils.data_manager import load_dataset
 
@@ -20,7 +20,11 @@ def build_index(file_path, save_path="faiss_index"):
     documents = []
 
     for row in df.itertuples(index=False):
-        text = preprocess_text(row.transcript, translation_chain=translation_chain)
+        text = preprocess_text(
+            row.transcript,
+            transcript_language=getattr(row, "transcript_language", ""),
+            translation_chain=translation_chain,
+        )
         if not text:
             continue
 
@@ -51,7 +55,7 @@ def build_index(file_path, save_path="faiss_index"):
     for index, doc in enumerate(docs):
         doc.metadata["chunk_id"] = index
 
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    embeddings = OpenAIEmbeddingFunction()
     vectorstore = FAISS.from_documents(docs, embeddings)
 
     save_dir = Path(save_path)

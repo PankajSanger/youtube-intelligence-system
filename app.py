@@ -9,6 +9,8 @@ import pandas as pd
 import streamlit as st
 from googleapiclient.errors import HttpError
 
+from apify_service import apify_is_configured, fetch_transcript_with_apify
+from openai_service import openai_is_configured
 from rag.pipeline import run_query
 from rag.retriever import load_or_create_index
 from utils.data_manager import DATA_PATH, get_dataset_summary, load_dataset, save_new_data
@@ -239,6 +241,35 @@ def render_video_card(row: pd.Series) -> None:
     )
 
 
+def apply_video_filters(
+    videos: list[dict],
+    min_duration_seconds: int,
+    require_transcript: bool,
+) -> tuple[list[dict], dict[str, int]]:
+    duration_removed = 0
+    transcript_removed = 0
+    kept: list[dict] = []
+
+    for video in videos:
+        duration = int(video.get("duration_seconds", 0) or 0)
+        has_transcript = bool(str(video.get("transcript", "") or "").strip())
+
+        if duration < min_duration_seconds:
+            duration_removed += 1
+            continue
+        if require_transcript and not has_transcript:
+            transcript_removed += 1
+            continue
+        kept.append(video)
+
+    return kept, {
+        "fetched": len(videos),
+        "kept": len(kept),
+        "duration_removed": duration_removed,
+        "transcript_removed": transcript_removed,
+    }
+
+
 inject_styles()
 
 if "vectorstore" not in st.session_state:
@@ -275,7 +306,8 @@ with action_cols[2]:
     status_parts = [
         "Index ready" if index_exists else "Index missing",
         "YouTube key ready" if os.getenv("YOUTUBE_API_KEY") else "YouTube key missing",
-        "LLM enabled" if os.getenv("HUGGINGFACEHUB_API_TOKEN") else "Excerpt fallback",
+        "Apify fallback ready" if apify_is_configured() else "Apify fallback not configured",
+        "OpenAI ready" if openai_is_configured() else "OpenAI missing",
     ]
     st.caption(" | ".join(status_parts))
 
@@ -327,23 +359,36 @@ with tabs[0]:
                     with st.spinner("Enriching videos with stats and transcripts..."):
                         enriched_videos = enrich_videos(base_videos)
 
-                    filtered_videos = [
-                        video
-                        for video in enriched_videos
-                        if video.get("duration_seconds", 0) >= min_duration_seconds
-                        and (not require_transcript or video.get("transcript", "").strip())
-                    ]
+                    filtered_videos, filter_stats = apply_video_filters(
+                        enriched_videos,
+                        min_duration_seconds=min_duration_seconds,
+                        require_transcript=require_transcript,
+                    )
 
-                    removed_count = len(enriched_videos) - len(filtered_videos)
+                    if not filtered_videos and min_duration_seconds == 0 and not require_transcript and enriched_videos:
+                        filtered_videos = enriched_videos
+                        filter_stats["kept"] = len(filtered_videos)
+                        filter_stats["duration_removed"] = 0
+                        filter_stats["transcript_removed"] = 0
+
                     if not filtered_videos:
-                        st.warning("No videos passed the current filters.")
+                        st.warning(
+                            "No videos passed the current filters. "
+                            f"Fetched: {filter_stats['fetched']}, "
+                            f"removed by duration: {filter_stats['duration_removed']}, "
+                            f"removed by transcript: {filter_stats['transcript_removed']}."
+                        )
                     else:
                         dataset_df = save_new_data(filtered_videos)
                         st.session_state["last_fetch_df"] = pd.DataFrame(filtered_videos)
                         summary = get_dataset_summary(dataset_df)
                         st.success(f"Saved {len(filtered_videos)} videos.")
-                        if removed_count:
-                            st.info(f"Filtered out {removed_count} videos.")
+                        if filter_stats["fetched"] != filter_stats["kept"]:
+                            st.info(
+                                f"Fetched {filter_stats['fetched']} videos. "
+                                f"Filtered out {filter_stats['duration_removed']} by duration and "
+                                f"{filter_stats['transcript_removed']} by transcript requirement."
+                            )
             except HttpError as exc:
                 st.error(f"YouTube API error: {exc}")
             except RuntimeError as exc:
@@ -421,3 +466,27 @@ with tabs[3]:
         st.markdown("#### Answer")
         st.write(st.session_state["last_answer"])
         st.markdown("</div>", unsafe_allow_html=True)
+
+st.divider()
+with st.expander("Transcript Debug Tool"):
+    debug_video_id = st.text_input("Video ID for transcript test", placeholder="Example: dQw4w9WgXcQ")
+    if st.button("Test Apify Transcript", width="stretch"):
+        if not debug_video_id.strip():
+            st.warning("Enter a video ID first.")
+        else:
+            with st.spinner("Calling Apify transcript actor..."):
+                debug_result = fetch_transcript_with_apify(debug_video_id.strip())
+            st.write(
+                {
+                    "transcript_source": debug_result.get("transcript_source", ""),
+                    "transcript_language": debug_result.get("transcript_language", ""),
+                    "transcript_length": len(debug_result.get("transcript", "")),
+                }
+            )
+            if debug_result.get("debug_error"):
+                st.code(debug_result["debug_error"])
+            preview = debug_result.get("transcript", "")[:1200]
+            if preview:
+                st.text_area("Transcript preview", value=preview, height=220)
+            else:
+                st.info("No transcript text returned by Apify.")

@@ -140,7 +140,15 @@ def save_dataset(df: pd.DataFrame, path: Path | str = DATA_PATH) -> pd.DataFrame
     path.parent.mkdir(parents=True, exist_ok=True)
 
     normalized = normalize_dataset(df)
-    normalized[STANDARD_COLUMNS].to_excel(path, index=False)
+    try:
+        normalized[STANDARD_COLUMNS].to_excel(path, index=False)
+    except PermissionError as exc:
+        backup_path = path.with_name(f"{path.stem}.autosave{path.suffix}")
+        normalized[STANDARD_COLUMNS].to_excel(backup_path, index=False)
+        raise RuntimeError(
+            f"Could not write to '{path}' because it is open in another program. "
+            f"Close the file and try again. A backup copy was saved to '{backup_path}'."
+        ) from exc
     return normalized
 
 
