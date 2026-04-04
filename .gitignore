@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 data/
 *.db
+faiss_index/
+.streamlit/

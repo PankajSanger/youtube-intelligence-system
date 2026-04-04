@@ -1,37 +1,101 @@
+from __future__ import annotations
+
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import (
-    TranscriptsDisabled,
+    CouldNotRetrieveTranscript,
     NoTranscriptFound,
-    VideoUnavailable
+    NotTranslatable,
+    TranscriptsDisabled,
+    TranslationLanguageNotAvailable,
+    VideoUnavailable,
 )
 
+TRANSCRIPT_API = YouTubeTranscriptApi()
+PREFERRED_LANGUAGES = ("en", "en-US", "hi", "hi-IN")
 
-def transcript_fetch(video_id):
+
+def _join_segments(transcript) -> str:
+    try:
+        return " ".join(segment.text for segment in transcript if getattr(segment, "text", "")).strip()
+    except Exception:
+        return ""
+
+
+def _fetch_direct(video_id: str):
+    transcript = TRANSCRIPT_API.fetch(video_id, languages=PREFERRED_LANGUAGES, preserve_formatting=False)
+    text = _join_segments(transcript)
+    language_code = getattr(transcript, "language_code", "")
+    is_generated = bool(getattr(transcript, "is_generated", False))
+    source = "generated" if is_generated else "manual"
+    return {
+        "transcript": text,
+        "transcript_language": language_code,
+        "transcript_source": source,
+    }
+
+
+def transcript_fetch(video_id: str) -> dict[str, str]:
     """
-    Fetch transcript in preferred languages (English > Hindi fallback)
+    Fetch transcript metadata with English preference and translation fallback.
     """
+
+    empty = {
+        "transcript": "",
+        "transcript_language": "",
+        "transcript_source": "unavailable",
+    }
 
     try:
-        # Try English first
-        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=["en"])
-
+        direct = _fetch_direct(video_id)
+        if direct["transcript"]:
+            return direct
     except NoTranscriptFound:
-        try:
-            # Fallback to Hindi
-            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=["hi"])
-        except Exception:
-            return ""
+        pass
+    except (TranscriptsDisabled, VideoUnavailable, CouldNotRetrieveTranscript):
+        return empty
+    except Exception:
+        pass
 
-    except (TranscriptsDisabled, VideoUnavailable):
-        return ""
-
-    except Exception as e:
-        print(f"[Transcript Error] {video_id}: {e}")
-        return ""
-
-    # Convert to plain text
     try:
-        full_text = " ".join([t["text"] for t in transcript])
-        return full_text.strip()
-    except:
-        return ""
+        transcript_list = TRANSCRIPT_API.list(video_id)
+        preferred = transcript_list.find_transcript(PREFERRED_LANGUAGES)
+        fetched = preferred.fetch(preserve_formatting=False)
+        text = _join_segments(fetched)
+        if text:
+            source = "generated" if getattr(preferred, "is_generated", False) else "manual"
+            return {
+                "transcript": text,
+                "transcript_language": getattr(preferred, "language_code", ""),
+                "transcript_source": source,
+            }
+    except NoTranscriptFound:
+        pass
+    except (TranscriptsDisabled, VideoUnavailable, CouldNotRetrieveTranscript):
+        return empty
+    except Exception:
+        pass
+
+    try:
+        transcript_list = TRANSCRIPT_API.list(video_id)
+        for transcript in transcript_list:
+            if not getattr(transcript, "is_translatable", False):
+                continue
+            try:
+                translated = transcript.translate("en")
+                fetched = translated.fetch(preserve_formatting=False)
+                text = _join_segments(fetched)
+                if text:
+                    source = "translated-generated" if getattr(transcript, "is_generated", False) else "translated-manual"
+                    return {
+                        "transcript": text,
+                        "transcript_language": "en",
+                        "transcript_source": source,
+                    }
+            except (NotTranslatable, TranslationLanguageNotAvailable):
+                continue
+            except Exception:
+                continue
+    except Exception:
+        return empty
+
+    return empty

@@ -1,52 +1,60 @@
-import pandas as pd
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
+from __future__ import annotations
 
-from rag.preprocessing import preprocess_text, build_translation_chain
+from pathlib import Path
+
+from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from rag.preprocessing import build_translation_chain, preprocess_text
+from utils.data_manager import load_dataset
 
 
 def build_index(file_path, save_path="faiss_index"):
-
-    df = pd.read_excel(file_path)
+    df = load_dataset(file_path)
+    if df.empty:
+        raise ValueError("No dataset found to index.")
 
     translation_chain = build_translation_chain()
-
     documents = []
 
-    for i in range(len(df)):
-        raw_text = df.loc[i, "transcript"]
-
-        text = preprocess_text(
-            raw_text,
-            translation_chain=translation_chain
-        )
-
-        if not text.strip():
+    for row in df.itertuples(index=False):
+        text = preprocess_text(row.transcript, translation_chain=translation_chain)
+        if not text:
             continue
 
-        documents.append(Document(
-            page_content=text,
-            metadata={"video_id": df.loc[i, "video_id"]}
-        ))
+        documents.append(
+            Document(
+                page_content=text,
+                metadata={
+                    "video_id": row.video_id,
+                    "title": row.title,
+                    "channel": row.channel,
+                    "published_at": row.published_at,
+                    "url": row.url,
+                    "transcript_language": row.transcript_language,
+                },
+            )
+        )
+
+    if not documents:
+        raise ValueError("No usable transcripts found. Fetch videos with transcripts before building the index.")
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=150,
-        separators=["\n\n", "\n", ". ", "।", ", ", " ", ""]
+        chunk_size=900,
+        chunk_overlap=180,
+        separators=["\n\n", "\n", ". ", "।", ", ", " ", ""],
     )
-
     docs = splitter.split_documents(documents)
 
-    for i, doc in enumerate(docs):
-        doc.metadata["chunk_id"] = i
+    for index, doc in enumerate(docs):
+        doc.metadata["chunk_id"] = index
 
-    embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
-    )
-
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     vectorstore = FAISS.from_documents(docs, embeddings)
-    vectorstore.save_local(save_path)
 
-    print("✅ FAISS index built and saved")
+    save_dir = Path(save_path)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    vectorstore.save_local(str(save_dir))
+    return vectorstore
