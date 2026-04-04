@@ -5,29 +5,33 @@ from youtube_transcript_api._errors import (
     VideoUnavailable
 )
 
+
 def transcript_fetch(video_id):
+    """
+    Fetch transcript in preferred languages (English > Hindi fallback)
+    """
+
     try:
-        # Try fetching transcript in preferred languages
-        ytt_api = YouTubeTranscriptApi()
-        fetched_transcript = ytt_api.fetch(
-            video_id,
-            languages=['en', 'hi']
-        )
-
-        snippets_list = [snippet.text for snippet in fetched_transcript]
-
-        final_transcript = " ".join(snippets_list)
-
-        return final_transcript
-
-    except TranscriptsDisabled:
-        return "Transcript is disabled for this video."
+        # Try English first
+        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=["en"])
 
     except NoTranscriptFound:
-        return "No transcript found in the specified languages."
+        try:
+            # Fallback to Hindi
+            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=["hi"])
+        except Exception:
+            return ""
 
-    except VideoUnavailable:
-        return "Video is unavailable."
+    except (TranscriptsDisabled, VideoUnavailable):
+        return ""
 
     except Exception as e:
-        return f"Error occurred: {str(e)}"
+        print(f"[Transcript Error] {video_id}: {e}")
+        return ""
+
+    # Convert to plain text
+    try:
+        full_text = " ".join([t["text"] for t in transcript])
+        return full_text.strip()
+    except:
+        return ""
